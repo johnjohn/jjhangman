@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+#
+# This line above is a "shebang" - it tells the calling shell to run this file as a python script
+# More specifically, when this file is called from the command line shell, it will see the "#!" sequence, and then run this file as an argument to the program
+# defined at the location directly after the shebang (eg `/usr/bin/env python3 jjhangman`)
+# This can be useful if you don't want to run the command with `python <script_filename>` and instead just want to run the script as `./<script_filename>`, or `<script_filename>` if the directory is in your $PATH
+#
+# Note: this only works on (most) Unix shells (bash, sh, ksh, csh for Apple devices, etc) and not IBM/Windows shells (cmd/powershell); there's ways of making it work, but it's a pain in the ass
+# Another note: it's not really POSIX portable, and if you care about that sort of niche thing, the above is moot and you shouldn't do this anyway. :^)
+
+
+####################### START OF PROGRAM HERE ##########################
+# We're importing two modules - `os` for basic cross-platform functionality like opening files, and `argparse` for accepting arguments on the commandline - we'll implement a way to
+# import your own wordlists into the hangman game using this functionality
+# We'll also import `random` for RNG, which we'll use to randomly pick the word for the game, and enum, for making named constants
+# Lastly, we'll use `math` for floor/ceiling functions - we'll use them to calculate padding for our display 
+# TODO: Actually use enums when we discuss them in the sekrit club chat
+# Note to self: the above TODO will never be do'd and you know it
+import os
+import argparse
+import random
+import math
+import enum
+
+# Argument parsing - argparse will autogenerate help assuming we use it correctly
+parser = argparse.ArgumentParser(
+    prog="johnjohn's Hangman",
+    description="A simple hangman game")
+
+parser.add_argument("filename", help="Word file")
+args = parser.parse_args()
+
+# Globals (mostly just flags and play area dimensions and frame elements for displaying/refreshing the screen)
+# lowercase = variable
+# UPPERCASE = constant
+# Also, I single-quote when I have single-char strings - it's a holdover from C for me; do what you want as far as quotes go, but be consistent
+# Note to club members: there's better ways of organizing this, but globals made it
+display_title_screen = True
+# Gamestate vars
+gamestate_word = ""
+gamestate_selected_word = ""
+gamestate_word_length = 0
+gamestate_guesses_left = 6
+gamestate_last_guess_correct = False
+gamestate_guessed_letters = []
+gamestate_already_guessed_letter = False
+gamestate_empty_guess = False
+
+# Our word file, provided by command line args
+WORDFILE_FILENAME = args.filename
+
+# Constants for the display and what each line "does" - it would be better if these were enums, but I'm just putting them here and
+# referencing them while actually using them nowhere else in the code because I'm lazy :^)
+WORD_DISPLAY_LINE = 3
+TOP_GALLOW_DISPLAY_LINE = 5
+HEAD_DISPLAY_LINE = 7
+ARM_DISPLAY_LINE = 8
+LEG_DISPLAY_LINE = 10
+GUESS_RESPONSE_LINE = 12
+INPUT_DISPLAY_LINE = 13
+DISPLAY_WIDTH = 54
+DISPLAY_HEIGHT = 16
+
+GUESS_PROMPT_STRING = "Your word to guess is: "
+CORRECT_GUESS_STRING_LIST = ["Nice!", "Good job!", "Correct!", "Hell yeah!", "You're right!", "Absolutely!", "Yup!", "Exactly!", "For sure!"]
+INCORRECT_GUESS_STRING_LIST = ["Whelp...", "Nope.", "No, sorry!", "Not quite.", "Guess again.", "Crap.", "Incorrect.", "Try again."]
+INSULT_LIST = ["goober", "dork", "dummy", "silly", "dumbass", "idiot", "scrub"]
+# Why waste cycles recalculating the length of a string that is a constant? Make the length a constant as well (GUESS_PROMPT_STRING_LENGTH)
+# (This is a pointless micro-optimization 99.9999% of the time and is only relevant on big projects, but it's good practice to enum/state constants ahead of time regardless)
+GUESS_PROMPT_STRING_LENGTH = 23
+TOP_GALLOW_STRING = "/----\\"
+TOP_GALLOW_STRING_LENGTH = 6
+ROPE_STRING = '{'
+NOOSE_STRING = '&'
+HEAD_STRING = 'O'
+TORSO_STRING = '|'
+LEFT_ARM_STRING = '/'
+RIGHT_ARM_STRING = '\\'
+LEFT_LEG_STRING = '/'
+RIGHT_LEG_STRING = '\\'
+GALLOW_POLE_STRING = '|'
+TOP_OUTER_FRAME_STRING = " ________________________________________________________ "
+TOP_INNER_FRAME_STRING = "| ______________________________________________________ |"
+EMPTY_DISPLAY_LINE = "                                                      "
+SIDE_FRAME_STRING = "||"
+BOTTOM_INNER_FRAME_STRING = "||______________________________________________________||"
+BOTTOM_OUTER_FRAME_STRING = "|________________________________________________________|"
+
+def generate_initial_gamestate():
+    # Using the global keyword here - for more info on what the hell this is, see the comment in display_gamestate
+    global args
+    global gamestate_selected_word
+    global gamestate_word
+    global gamestate_word_length
+    # We'll read the word file we got from the arguments into an list
+    with open(args.filename, 'r') as file:
+        lines = [line.strip() for line in file]
+
+    # We'll randomly pick a number between 0 and the length of our list and use that number as the index into our wordlist, selecting our word for the game
+    # REMEMBER: Python list indices start at 0 - always subtract 1 to avoid generating a number that is potentially out of bounds
+    word_index = random.randint(0, len(lines) - 1)
+    selected_word = lines[word_index]
+    # Now that we have our word, we need to generate the string that displays when the word is hidden - we'll reveal each letter as the user guesses correctly at runtime
+    gamestate_selected_word = selected_word
+    gamestate_word_length = len(selected_word)
+    gamestate_word = "_" * gamestate_word_length 
+
+    # Almost done, now let's do a screen clear so we can rebuild the screen later
+    clear_screen()
+    return
+
+
+# We'll call `display_gamestate` at the beginning of each loop iteration, since we will clear the screen at the end of the loop and this will effectively "refresh" what the user sees
+def display_gamestate():
+    # Title screen display
+    #
+    # A word on the `global` keyword:
+    # Variables in Python are locally scoped; eg we have to tell our function to look outside of itself to find `display_title_screen` via the `global` keyword. Otherwise, we would never be able to
+    # modify `display_title_screen` and it would just error out, since `display_title_screen` is not defined in this function
+    # The title screen is hardcoded, but we'll programatically build the same frame and display used by the title screen that will hold our game once we go past the title screen
+    global display_title_screen
+    global gamestate_gameover
+    if display_title_screen:
+        print(" ________________________________________________________ ")
+        print("| ______________________________________________________ |")
+        print("||                     Welcome to                       ||")
+        print("||                                                      ||")
+        print("||    ▗▖ ▄▄▄  ▐▌   ▄▄▄▄     ▗▖ ▄▄▄  ▐▌   ▄▄▄▄  ▄  ▄▄▄▄  ||")
+        print("||    ▗▖█   █ ▐▌   █   █    ▗▖█   █ ▐▌   █   █ ▀ ▀▄▄▄   ||")
+        print("|| ▄  ▐▌▀▄▄▄▀ ▐▛▀▚▖█   █ ▄  ▐▌▀▄▄▄▀ ▐▛▀▚▖█   █   ▄▄▄▄▀  ||")
+        print("|| ▀▄▄▞▘      ▐▌ ▐▌      ▀▄▄▞▘      ▐▌ ▐▌               ||")
+        print("||                                                      ||")
+        print("||       ▗▖ ▗▖▗▞▀▜▌▄▄▄▄       ▄▄▄▄  ▗▞▀▜▌▄▄▄▄           ||")
+        print("||       ▐▌ ▐▌▝▚▄▟▌█   █      █ █ █ ▝▚▄▟▌█   █          ||")
+        print("||       ▐▛▀▜▌     █   █      █   █      █   █          ||")
+        print("||       ▐▌ ▐▌            ▗▄▖                           ||")
+        print("||                        ▐▌ ▐▌                         ||")
+        print("||                         ▝▀▜▌                         ||")
+        print("||                        ▐▙▄▞▘                         ||")
+        print("||                                                      ||")
+        print("||             Press Enter to continue ...              ||") 
+        print("||______________________________________________________||")
+        print("|________________________________________________________|")
+        input()
+        # We'll generate the initial gamestate here since this `if display_title_screen` statment statement should only run once
+        generate_initial_gamestate()
+        display_title_screen = False
+    
+    # We'll be looping through the display lines now to interatively "render" the screen, line by line
+    current_line = 1
+    print(TOP_OUTER_FRAME_STRING)
+    print(TOP_INNER_FRAME_STRING)
+    while current_line < DISPLAY_HEIGHT:
+        match current_line:
+            case 3:
+                # We'll dynamically generate a space-padding string to center all of the elements - we'll take the char length of all readable output on a line, and divide it by 2
+                # This leaves an edge case where flooring will produce a padding that is 1 less than the display width if dividing by 2 produces a float because the count 
+                # is an odd number - we fix that by checking if the count has a remainder and add an additional space accordingly
+                padding_total = DISPLAY_WIDTH - (gamestate_word_length + GUESS_PROMPT_STRING_LENGTH)
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+                print(SIDE_FRAME_STRING + left_padding + GUESS_PROMPT_STRING + gamestate_word + right_padding + SIDE_FRAME_STRING)
+            case 5:
+                padding_total = DISPLAY_WIDTH - TOP_GALLOW_STRING_LENGTH
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+                print(SIDE_FRAME_STRING + left_padding + TOP_GALLOW_STRING + right_padding + SIDE_FRAME_STRING)
+            case 6:
+                # You get the idea - again, for laziness' sake, I'll calculate string lengths in each line at runtime because I'm getting way too many constants at the top of this file, and I'm trying to keep this all in one file
+                padding_total = DISPLAY_WIDTH - (len(ROPE_STRING) + len("    ") + len(GALLOW_POLE_STRING))
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+                print(SIDE_FRAME_STRING + left_padding + ROPE_STRING + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+            case 7:
+                padding_total = DISPLAY_WIDTH - (len(NOOSE_STRING) + len("    ") + len(GALLOW_POLE_STRING))
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+                if gamestate_guesses_left < 6:
+                    print(SIDE_FRAME_STRING + left_padding + "O" + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+                else:
+                    print(SIDE_FRAME_STRING + left_padding + NOOSE_STRING + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+            case 8:
+                # This is a funny one - we have to account for arms that may not exist yet
+                # There's far more elegant ways to do this, but we're hamfisting this shit at this point - Python is great for prototyping,
+                # but putting "STRING" at the end of all my vars to keep myself sane while working with dynamic types is making my wrists hurt
+                padding_total = DISPLAY_WIDTH - (len(TORSO_STRING) + len("    ") + len(GALLOW_POLE_STRING))
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+                match gamestate_guesses_left:
+                    case 4:
+                        print(SIDE_FRAME_STRING + left_padding + TORSO_STRING + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+                    case 3:
+                        print(SIDE_FRAME_STRING + (" " * (len(left_padding) - 1)) + LEFT_ARM_STRING + TORSO_STRING + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+                    case _ if gamestate_guesses_left < 3:
+                        print(SIDE_FRAME_STRING + (" " * (len(left_padding) - 1)) + LEFT_ARM_STRING + TORSO_STRING + RIGHT_ARM_STRING + "   " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+                    case _: 
+                        print(SIDE_FRAME_STRING + left_padding + " " + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+            case 9:
+                padding_total = DISPLAY_WIDTH - (len(NOOSE_STRING) + len("    ") + len(GALLOW_POLE_STRING))
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+                if gamestate_guesses_left < 5:
+                    print(SIDE_FRAME_STRING + left_padding + TORSO_STRING + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+                else:
+                    print(SIDE_FRAME_STRING + left_padding + " " + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+            case 10:
+                # Similar to the arms, we have to account for non-existent legs
+                padding_total = DISPLAY_WIDTH - (len(TORSO_STRING) + len("    ") + len(GALLOW_POLE_STRING))
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+                match gamestate_guesses_left:
+                    case 1:
+                        print(SIDE_FRAME_STRING + (" " * (len(left_padding) - 1)) + LEFT_LEG_STRING + " " + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+                    case 0:
+                        print(SIDE_FRAME_STRING + (" " * (len(left_padding) - 1)) + LEFT_LEG_STRING + " " + RIGHT_LEG_STRING + "   " + GALLOW_POLE_STRING + left_padding + SIDE_FRAME_STRING)
+                    case _:
+                        print(SIDE_FRAME_STRING + left_padding + " " + "    " + GALLOW_POLE_STRING + right_padding + SIDE_FRAME_STRING)
+            case 12:
+                if gamestate_empty_guess == True:
+                    response = "You need to type at least one letter, " + INSULT_LIST[random.randint(0,6)] + "!"
+                elif gamestate_already_guessed_letter == True:
+                    response = "You've already guessed that letter, " + INSULT_LIST[random.randint(0,6)] + "!"
+                elif gamestate_last_guess_correct:
+                    response = CORRECT_GUESS_STRING_LIST[random.randint(0,8)]
+                elif gamestate_guesses_left == 0:
+                    response = "GAME OVER :("
+                else:
+                    response = INCORRECT_GUESS_STRING_LIST[random.randint(0,7)]
+
+
+                padding_total = DISPLAY_WIDTH - (len(response))
+                left_padding = " " * math.floor(padding_total/2)
+                if padding_total % 2 == 1:
+                    right_padding = " " * math.floor(padding_total/2) + " "
+                else:
+                    right_padding = " " * math.floor(padding_total/2)
+
+                if gamestate_guesses_left == 6 and gamestate_last_guess_correct == False:
+                    print(SIDE_FRAME_STRING + EMPTY_DISPLAY_LINE + SIDE_FRAME_STRING)
+                else:
+                    print(SIDE_FRAME_STRING + left_padding + response + right_padding + SIDE_FRAME_STRING)
+            case _:
+                print(SIDE_FRAME_STRING + EMPTY_DISPLAY_LINE + SIDE_FRAME_STRING)
+        current_line += 1
+    print(BOTTOM_INNER_FRAME_STRING)
+    print(BOTTOM_OUTER_FRAME_STRING)
+    # We'll print an additional newline to give the input line a little breathing room
+    print()
+    
+    return
+
+def get_user_input():
+    user_input = input("What is your letter guess? \n(Provide a single letter - multiple letters will be truncated to the first letter)\n> ")
+    if len(user_input) > 1:
+        user_input == list(user_input)[0]
+    return user_input
+
+# Given `user_input`, check if the letter they provided is in the selected word, perform some input validation, and handle (most) of the gamestate changes
+def process_user_input(user_input):
+    global gamestate_word
+    global gamestate_selected_word
+    global gamestate_last_guess_correct
+    global gamestate_guesses_left
+    global gamestate_guessed_letters
+    global gamestate_already_guessed_letter
+    global gamestate_empty_guess
+    gamestate_empty_guess = False
+    searching = False
+    search_substring = ""
+
+    # Check if the input is empty
+    if user_input == "":
+        gamestate_empty_guess = True
+        return
+    gamestate_empty_guess = False
+    # Check if the user has already guessed the letter they provided
+    if user_input.lower() in gamestate_guessed_letters:
+        gamestate_already_guessed_letter = True
+        return
+    gamestate_guessed_letters.extend(user_input.lower())
+    gamestate_already_guessed_letter = False
+
+    if user_input in gamestate_selected_word:
+        offset = 0
+        searching = True
+        gamestate_last_guess_correct = True
+        search_substring = gamestate_selected_word
+        while searching:
+            letter_index = search_substring.index(user_input.lower())
+            new_gamestate_word = list(gamestate_word)
+            new_gamestate_word[letter_index + offset] = user_input.upper()
+            gamestate_word = "".join(new_gamestate_word)
+            offset = offset + len(search_substring.split(user_input.lower(),1)[0]) + 1
+            search_substring = search_substring.split(user_input.lower(),1)[1]
+            if search_substring.find(user_input.lower()) == -1:
+                searching = False
+        return
+    gamestate_last_guess_correct = False
+    gamestate_guesses_left -= 1
+    return 
+    
+# A basic screen clear function - if the system reports back as `nt` eg Windows, use "cls" shell command to clear it, otherwise, use `clear`
+# Sidenote: os.system is usually a big no-no, since it feeds a string directly to the calling shell, and if someone has the ability (or input prompt) to
+# modify the string, it can potentially hijack control flow by running a shell command that's unintended
+# This usage is fine(ish) though, since the user can't modify the string and (let's be real) we won't be using this outside of a learning environment
+# For fancier, safer, more modern ways of spawning your own processes inside a Python script, see the Python docs for the `subprocess` module
+def clear_screen():
+    os.system("cls" if os.name == "nt" else "clear")
+
+def main():
+    running = True
+    # Inital screen clear
+    clear_screen()
+    while running:
+        display_gamestate()
+        user_input = get_user_input()
+        process_user_input(user_input)
+        clear_screen()
+        if gamestate_guesses_left == 0:
+            display_gamestate()
+            print("\n\nBetter luck next time!")
+            running = False
+        if gamestate_selected_word == gamestate_word.lower():
+            display_gamestate()
+            print("A winrar is you!")
+            running = False
+
+
+# --- WARNING: BORING CONTEXTUAL YAPFEST AHEAD - SKIP IF YOU DON'T CARE OR ARE ILLITERATE ---
+# AND NOW, THE MAIN() EVENT
+# Below is an very idiomatic Python thing - Python has internal variables denoted by any variable surrounded by double-underscores; these 
+# are literally called "magic objects" in Python's PEP ("Python Enhancement Policies" = Python's living standard)
+# Magic objects are effectively special variables that have specific purposes used by the Python interpreter, and 
+# you should only modify them based on how the standard is outlined for them.
+#
+# The two special objects below, `__name__` and the `__main__` value, each serve a special purpose when either running the script as a standalone program, OR importing the script as a module
+# like we did for `os` and `argparse`
+# 
+# When you import this script as a module, Python defines `__name__` as the filename itself rather than `__main__` which means the below if statement will NOT run, BUT the calling Python file that DOES
+# have `__name__` defined as `__main__` will have access to the functions in the file, effectively creating a library - for example, in a different script, if we imported this file as:
+#
+# import jjhangman
+#
+# ... we would have the ability to call the functions and use variables in this file under the "jjhangman" namespace (eg: `jjhangman.clear_screen()`)
+#
+# When you run your script as a standalone program, Python defines `__name__` at runtime as a string with `__main__` as the value. This is useful when you have logic that should run when
+# the script is ran standalone, but SHOULD NOT RUN when it's imported as a module - without the below if block, the main() function in this file would run even when it's imported
+# into another file and ran from that file (assuming you actually call main() somewhere).
+# --- /END BORING CONTEXT ---
+if __name__ == "__main__":
+    main()
